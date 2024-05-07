@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
+	"encoding/json" 
+    "fmt"
 	"os"
-	"time"
 	"github.com/joho/godotenv"
 	plaid "github.com/plaid/plaid-go/v21/plaid"
 )
@@ -14,6 +13,11 @@ var CLIENT_ID string
 var CLIENT_SECRET string
 
 var transactionData []Trans
+
+var cursor *string
+var added []plaid.Transaction
+var modified []plaid.Transaction
+var removed []plaid.RemovedTransaction // Removed transaction ids
 
 type Trans struct {
     Name string                 `json: "name"`
@@ -42,51 +46,57 @@ func configClient() *plaid.APIClient {
 
 func addTransactionWorker(accessToken string, client *plaid.APIClient) {
     envAccessToken := os.Getenv(accessToken)
+    // TODO: find a way to store cursor for this item id 
+
     ctx := context.Background()
+	hasMore := true
 
-    const iso8601TimeFormat = "2006-01-02"
-    startDate := time.Now().Add(-365 * 24 * time.Hour).Format(iso8601TimeFormat)
-    endDate := time.Now().Format(iso8601TimeFormat)
+	// Iterate through each page of new transaction updates for item
+	for hasMore {
+		request := plaid.NewTransactionsSyncRequest(envAccessToken)
+		if cursor != nil {
+			request.SetCursor(*cursor)
+		}
 
-    request := plaid.NewTransactionsGetRequest(
-      envAccessToken,
-      startDate,
-      endDate,
-    )
+		resp, _, _:= client.PlaidApi.TransactionsSync(
+			ctx,
+		).TransactionsSyncRequest(*request).Execute()
 
-    transactionsResp, _, err := client.PlaidApi.TransactionsGet(ctx).TransactionsGetRequest(*request).Execute()
-    if err != nil {
-        fmt.Println(err)
-        return
+		// Add this page of results
+		added = append(added, resp.GetAdded()...)
+		modified = append(modified, resp.GetModified()...)
+		removed = append(removed, resp.GetRemoved()...)
+		hasMore = resp.GetHasMore()
+
+		// Update cursor to the next cursor
+		nextCursor := resp.GetNextCursor()
+		cursor = &nextCursor
+	}
+}
+
+func cleanTransactions(transactions []plaid.Transaction) {
+    for i := 0; i < len(transactions); i++ {
+        t := transactions[i] 
+
+        var logo string;
+        if t.HasLogoUrl() {
+            logo = *t.LogoUrl.Get()
+        } else {
+            logo = ""
+        }
+
+        var transTime string
+        if t.Datetime.IsSet() {
+            tempDate := *t.Datetime.Get()
+            transTime = tempDate.String()
+        } else {
+            transTime = t.Date
+        }
+
+        newTrans := Trans{t.Name, logo, t.Amount, transTime}
+        transactionData = append(transactionData, newTrans)
     }
-
-    t := transactionsResp.Transactions[15]
-
-    var logo string;
-    if t.HasLogoUrl() {
-        logo = *t.LogoUrl.Get()
-    } else {
-        logo = ""
-    }
-
-    var transTime string
-    if t.Datetime.IsSet() {
-        tempDate := *t.Datetime.Get()
-        transTime = tempDate.String()
-    } else {
-        transTime = t.Date
-    }
-
-    // var location plaid.Location
-    // var newTrans Trans
-    // if t.LogoUrl.IsSet() {
-    //     newTrans = Trans{t.Name, *t.LogoUrl.Get(), t.Amount, t.Datetime, t.Location}
-    // } else {
-    //     newTrans = Trans{t.Name, "", t.Amount, t.Datetime, t.Location}
-    // }
-
-    newTrans := Trans{t.Name, logo, t.Amount, transTime}
-    transactionData = append(transactionData, newTrans)
+    fmt.Println(transactionData)
 }
 
 func main() {
@@ -94,10 +104,11 @@ func main() {
     client := configClient()
     addTransactionWorker("AMEX_ACCESS_TOKEN", client)
 
-    res, err := json.Marshal(transactionData)
+    cleanTransactions(added);
+
+    _, err := json.Marshal(transactionData)
     if err != nil {
         fmt.Println(err)
         return
     }
-    fmt.Println(string(res))
 }
