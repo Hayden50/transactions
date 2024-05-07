@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json" 
+	// "encoding/json" 
     "fmt"
 	"os"
 	"github.com/joho/godotenv"
@@ -15,9 +15,9 @@ var CLIENT_SECRET string
 var transactionData []Trans
 
 var cursor *string
-var added []plaid.Transaction
-var modified []plaid.Transaction
-var removed []plaid.RemovedTransaction // Removed transaction ids
+var added []Trans
+var modified []Trans
+var removed []string
 
 type Trans struct {
     Name string                 `json: "name"`
@@ -56,16 +56,20 @@ func addTransactionWorker(accessToken string, client *plaid.APIClient) {
 		request := plaid.NewTransactionsSyncRequest(envAccessToken)
 		if cursor != nil {
 			request.SetCursor(*cursor)
-		}
+        }
 
 		resp, _, _:= client.PlaidApi.TransactionsSync(
 			ctx,
 		).TransactionsSyncRequest(*request).Execute()
 
 		// Add this page of results
-		added = append(added, resp.GetAdded()...)
-		modified = append(modified, resp.GetModified()...)
-		removed = append(removed, resp.GetRemoved()...)
+        appendTransactions(&added, resp.GetAdded()...)
+        appendTransactions(&modified, resp.GetModified()...)
+        for i := 0; i < len(resp.GetRemoved()); i++ {
+            remTrans := resp.GetRemoved()[i]
+            removed = append(removed, remTrans.GetTransactionId())
+        }
+
 		hasMore = resp.GetHasMore()
 
 		// Update cursor to the next cursor
@@ -74,9 +78,10 @@ func addTransactionWorker(accessToken string, client *plaid.APIClient) {
 	}
 }
 
-func cleanTransactions(transactions []plaid.Transaction) {
-    for i := 0; i < len(transactions); i++ {
-        t := transactions[i] 
+// Helper function for converting the plaid.Transaction data into data that I can turn to JSON
+func appendTransactions(transArr *[]Trans, newTransactions ...plaid.Transaction) {
+    for i := 0; i < len(newTransactions); i++ {
+        t := newTransactions[i] 
 
         var logo string;
         if t.HasLogoUrl() {
@@ -94,9 +99,8 @@ func cleanTransactions(transactions []plaid.Transaction) {
         }
 
         newTrans := Trans{t.Name, logo, t.Amount, transTime}
-        transactionData = append(transactionData, newTrans)
+        *transArr = append(*transArr, newTrans)
     }
-    fmt.Println(transactionData)
 }
 
 func main() {
@@ -104,11 +108,10 @@ func main() {
     client := configClient()
     addTransactionWorker("AMEX_ACCESS_TOKEN", client)
 
-    cleanTransactions(added);
-
-    _, err := json.Marshal(transactionData)
-    if err != nil {
-        fmt.Println(err)
-        return
-    }
+    // res, err := json.Marshal(added)
+    // if err != nil {
+    //     fmt.Println(err)
+    //     return
+    // }
+    // fmt.Println(string(res))
 }
