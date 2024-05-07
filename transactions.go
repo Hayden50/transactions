@@ -1,18 +1,16 @@
 package main
-
 import (
 	"context"
-	// "encoding/json" 
+	"encoding/json" 
     "fmt"
 	"os"
 	"github.com/joho/godotenv"
 	plaid "github.com/plaid/plaid-go/v21/plaid"
+    "trans/utils"
 )
 
 var CLIENT_ID string
 var CLIENT_SECRET string
-
-var transactionData []Trans
 
 var cursor *string
 var added []Trans
@@ -20,6 +18,7 @@ var modified []Trans
 var removed []string
 
 type Trans struct {
+    Acc string                  `json: "acc"`
     Name string                 `json: "name"`
     Logo string                 `json: "logo"`
     Cost float64                `json: "cost"`
@@ -44,9 +43,17 @@ func configClient() *plaid.APIClient {
     return plaid.NewAPIClient(configuration)
 }
 
-func addTransactionWorker(accessToken string, client *plaid.APIClient) {
-    envAccessToken := os.Getenv(accessToken)
-    // TODO: find a way to store cursor for this item id 
+
+func addTransactionWorker(accessKey string, client *plaid.APIClient) {
+    envAccessToken := os.Getenv(accessKey)
+    filePath := "./cursors/" + accessKey + ".txt"
+
+    //Pass the file name to the ReadFile() function from 
+	content, error := os.ReadFile(filePath)
+	if error == nil {
+        cursor = new(string) // Assign a new memory address to cursor
+        *cursor = string(content)
+	}
 
     ctx := context.Background()
 	hasMore := true
@@ -63,8 +70,8 @@ func addTransactionWorker(accessToken string, client *plaid.APIClient) {
 		).TransactionsSyncRequest(*request).Execute()
 
 		// Add this page of results
-        appendTransactions(&added, resp.GetAdded()...)
-        appendTransactions(&modified, resp.GetModified()...)
+        appendTransactions(accessKey, &added, resp.GetAdded()...)
+        appendTransactions(accessKey, &modified, resp.GetModified()...)
         for i := 0; i < len(resp.GetRemoved()); i++ {
             remTrans := resp.GetRemoved()[i]
             removed = append(removed, remTrans.GetTransactionId())
@@ -75,11 +82,16 @@ func addTransactionWorker(accessToken string, client *plaid.APIClient) {
 		// Update cursor to the next cursor
 		nextCursor := resp.GetNextCursor()
 		cursor = &nextCursor
+
+        err := utils.WriteFile(filePath, *cursor)
+        if err != nil {
+            fmt.Println("There was an error saving the new cursor")
+        }
 	}
 }
 
 // Helper function for converting the plaid.Transaction data into data that I can turn to JSON
-func appendTransactions(transArr *[]Trans, newTransactions ...plaid.Transaction) {
+func appendTransactions(account string, transArr *[]Trans, newTransactions ...plaid.Transaction) {
     for i := 0; i < len(newTransactions); i++ {
         t := newTransactions[i] 
 
@@ -98,7 +110,7 @@ func appendTransactions(transArr *[]Trans, newTransactions ...plaid.Transaction)
             transTime = t.Date
         }
 
-        newTrans := Trans{t.Name, logo, t.Amount, transTime}
+        newTrans := Trans{account, t.Name, logo, t.Amount, transTime}
         *transArr = append(*transArr, newTrans)
     }
 }
@@ -108,10 +120,10 @@ func main() {
     client := configClient()
     addTransactionWorker("AMEX_ACCESS_TOKEN", client)
 
-    // res, err := json.Marshal(added)
-    // if err != nil {
-    //     fmt.Println(err)
-    //     return
-    // }
-    // fmt.Println(string(res))
+    res, err := json.Marshal(added)
+    if err != nil {
+        fmt.Println(err)
+        return
+    }
+    fmt.Println(string(res))
 }
